@@ -79,8 +79,10 @@ func WithCollector(coll Collector) ClientOption {
 
 // WithNoConnClose prevents client from closing underlying connection when
 // the Close() method is called.
-var WithNoConnClose ClientOption = func(c *Client) {
-	c.closeConn = false
+func WithNoConnClose() ClientOption {
+	return func(c *Client) {
+		c.closeConn = false
+	}
 }
 
 // WithNoRetransmit disables retransmissions and sets RTO to
@@ -116,7 +118,7 @@ func NewClient(conn Connection, options ...ClientOption) (*Client, error) {
 	c := &Client{
 		close:       make(chan struct{}),
 		c:           conn,
-		clock:       systemClock,
+		clock:       systemClock(),
 		rto:         int64(defaultRTO),
 		rtoRate:     defaultTimeoutRate,
 		t:           make(map[transactionID]*clientTransaction, 100),
@@ -157,14 +159,14 @@ func clientFinalizer(c *Client) {
 		return
 	}
 	err := c.Close()
-	if err == ErrClientClosed {
+	if errors.Is(err, ErrClientClosed) {
 		return
 	}
 	if err == nil {
-		log.Println("client: called finalizer on non-closed client") // nolint
+		log.Println("client: called finalizer on non-closed client")
 		return
 	}
-	log.Println("client: called finalizer on non-closed client:", err) // nolint
+	log.Println("client: called finalizer on non-closed client:", err)
 }
 
 // Connection wraps Reader, Writer and Closer interfaces.
@@ -225,7 +227,7 @@ func (t *clientTransaction) handle(e Event) {
 	}
 }
 
-var clientTransactionPool = &sync.Pool{
+var clientTransactionPool = &sync.Pool{ // nolint:gochecknoglobals
 	New: func() interface{} {
 		return &clientTransaction{
 			raw: make([]byte, 1500),
@@ -275,7 +277,9 @@ type systemClockService struct{}
 
 func (systemClockService) Now() time.Time { return time.Now() }
 
-var systemClock = systemClockService{}
+func systemClock() systemClockService {
+	return systemClockService{}
+}
 
 // SetRTO sets current RTO value.
 func (c *Client) SetRTO(rto time.Duration) {
@@ -301,7 +305,7 @@ type CloseErr struct {
 
 func sprintErr(err error) string {
 	if err == nil {
-		return "<nil>"
+		return "<nil>" :goconst
 	}
 	return err.Error()
 }
@@ -322,7 +326,7 @@ func (c *Client) readUntilClosed() {
 		}
 		_, err := m.ReadFrom(c.c)
 		if err == nil {
-			if pErr := c.a.Process(m); pErr == ErrAgentClosed {
+			if pErr := c.a.Process(m); errors.Is(pErr, ErrAgentClosed) {
 				return
 			}
 		}
@@ -330,10 +334,10 @@ func (c *Client) readUntilClosed() {
 }
 
 func closedOrPanic(err error) {
-	if err == nil || err == ErrAgentClosed {
+	if err == nil || errors.Is(err, ErrAgentClosed) {
 		return
 	}
-	panic(err) // nolint
+	panic(err)
 }
 
 type tickerCollector struct {
@@ -425,7 +429,7 @@ type callbackWaitHandler struct {
 func (s *callbackWaitHandler) HandleEvent(e Event) {
 	s.cond.L.Lock()
 	if s.callback == nil {
-		panic("s.callback is nil") // nolint
+		panic("s.callback is nil")
 	}
 	s.callback(e)
 	s.processed = true
@@ -445,7 +449,7 @@ func (s *callbackWaitHandler) wait() {
 
 func (s *callbackWaitHandler) setCallback(f func(event Event)) {
 	if f == nil {
-		panic("f is nil") // nolint
+		panic("f is nil")
 	}
 	s.cond.L.Lock()
 	s.callback = f
@@ -455,7 +459,7 @@ func (s *callbackWaitHandler) setCallback(f func(event Event)) {
 	s.cond.L.Unlock()
 }
 
-var callbackWaitHandlerPool = sync.Pool{
+var callbackWaitHandlerPool = sync.Pool{ // nolint:gochecknoglobals
 	New: func() interface{} {
 		return &callbackWaitHandler{
 			cond: sync.NewCond(new(sync.Mutex)),
@@ -509,7 +513,7 @@ type buffer struct {
 	buf []byte
 }
 
-var bufferPool = &sync.Pool{
+var bufferPool = &sync.Pool{ // nolint:gochecknoglobals
 	New: func() interface{} {
 		return &buffer{buf: make([]byte, 2048)}
 	},
@@ -527,7 +531,7 @@ func (c *Client) handleAgentCallback(e Event) {
 	}
 	c.mux.Unlock()
 	if !found {
-		if c.handler != nil && e.Error != ErrTransactionStopped {
+		if c.handler != nil && !errors.Is(e.Error, ErrTransactionStopped) {
 			c.handler(e)
 		}
 		// Ignoring.
